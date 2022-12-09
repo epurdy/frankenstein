@@ -3,6 +3,7 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
 from frankenstein.utils import get_tokens, get_str_tokens, detect_outliers
@@ -13,6 +14,7 @@ import colorsys
 from matplotlib.animation import FuncAnimation
 from copy import deepcopy
 import os
+from functools import partial
 
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
@@ -138,6 +140,7 @@ class OrthogonalDecomposition:
 
 def compute_orthogonal_decomposition(*, model, text, make_plot=False):
     tokens = get_tokens(model=model, text=text)
+    print(tokens.shape)
     str_tokens = get_str_tokens(model=model, text=text)
     logits, cache = model.run_with_cache(tokens)
     od = OrthogonalDecomposition(name=model.cfg.model_name, ntokens=len(tokens[0]), 

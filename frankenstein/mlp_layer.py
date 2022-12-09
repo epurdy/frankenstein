@@ -1,7 +1,14 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import torch.nn.functional as F
 from sklearn.cluster import AgglomerativeClustering
 from tqdm import tqdm
 
+from frankenstein.utils import get_device
+
 def cluster_mlp_neurons(model, num_clusters):
+    device = get_device(model)
     for layer in tqdm(range(model.cfg.n_layers)):
         sims = np.zeros((num_clusters, num_clusters))
         mlp_win = model.blocks[layer].mlp.W_in.T.detach().cpu().numpy()

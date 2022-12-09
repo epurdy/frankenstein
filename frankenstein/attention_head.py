@@ -1,8 +1,13 @@
 from collections import defaultdict
 
+import matplotlib.pyplot as plt
+import networkx as nx
+import numpy as np
+import plotly.express as px
 import torch
+from tqdm import tqdm
 
-from frankenstein.utils import get_attention_head_subspaces, get_projector
+from frankenstein.utils import get_projector
 
 
 def get_attention_head_subspaces(model):
@@ -24,10 +29,6 @@ def relation_score(subspace1, subspace2):
     subspace1 = subspace1.unsqueeze(0)
     subspace2 = subspace2.unsqueeze(1)
     return torch.cosine_similarity(subspace1, subspace2, dim=-1).abs().mean()
-
-def get_projector(subspace1):
-#    return subspace1 @ torch.pinverse(subspace1.T @ subspace1) @ subspace1.T
-    return subspace1.T @ torch.pinverse(subspace1 @ subspace1.T) @ subspace1
 
 def relation_score2(subspace1_projector, subspace2):
     #subspace2_projected = subspace1_projector @ subspace2
@@ -66,7 +67,7 @@ def get_relation_score_baseline():
     plt.hist(scores, bins=100)
     return scores
 
-def analyze_scores(scores):
+def analyze_scores(scores, *, lower_thresh, upper_thresh):
     scores_by_mat = defaultdict(list)
     gf = nx.Graph()
     all_subspace_keys = set()
@@ -150,9 +151,6 @@ def analyze_scores(scores):
                         ims[mat][layer, head] = score
                     else:
                         ims[mat][layer, head] = np.nan
-                    if key.startswith('05.09.'):
-                        if not (lower_thresh < score < upper_thresh):
-                            print(f'{key} {key2} {score:.2f}')
         im = np.concatenate([np.concatenate([ims[mat] for mat in 'KQ'], axis=1),
                                 np.concatenate([ims[mat] for mat in 'OV'], axis=1)], axis=0)
         ax.imshow(im, vmin=thresh, vmax=1, cmap='turbo', interpolation='nearest')
@@ -163,11 +161,6 @@ def analyze_scores(scores):
         ax.colorbar = plt.colorbar(ax.images[0], ax=ax)
     plt.tight_layout()
 
-
-lower_thresh = 0.243
-upper_thresh = 0.332
-
-analyze_scores(scores)
 
 
 def describe_head_subspace_relations(*, model, scores, layer, head, thresh=0.5, omit_uninteresting=True):

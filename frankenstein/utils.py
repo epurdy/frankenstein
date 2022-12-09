@@ -6,6 +6,11 @@ from easy_transformer import EasyTransformer
 from tqdm import tqdm
 
 
+def get_projector(subspace):
+#    return subspace @ torch.pinverse(subspace.T @ subspace) @ subspace.T
+    return subspace.T @ torch.pinverse(subspace @ subspace.T) @ subspace
+
+
 def get_model(*, name, device):
     # device = 'cuda'
     # device = 'mps'
