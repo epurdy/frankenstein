@@ -160,7 +160,7 @@ def compute_orthogonal_decomposition(*, model, text, make_plot=False):
 def compute_od_statistics(*, model, texts):
     all_scores = defaultdict(list)
     for text in tqdm(texts):
-        od = compute_orthogonal_decomposition(model, text)
+        od = compute_orthogonal_decomposition(model=model, text=text)
         for i in range(od.ntokens):            
             for block in od.blocks[i]:
                 term, dir, score = block

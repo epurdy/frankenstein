@@ -5,9 +5,10 @@ import networkx as nx
 import numpy as np
 import plotly.express as px
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
-from frankenstein.utils import get_projector
+from frankenstein.utils import get_projector, get_device, show_layer_head_image
 
 
 def get_attention_head_subspaces(model):
@@ -52,6 +53,35 @@ def get_attention_head_subspace_relations(model):
     px.imshow(im, labels=dict(x='subspacex', y='subspacey', color='relation score'), x=keys, y=keys, 
                 color_continuous_scale='viridis').show()
     return retval
+
+def get_attention_head_subspace_relations_per_head(*, model, head, layer, thresh=0.5):
+    retval = {}
+    subspaces = get_attention_head_subspaces(model)
+    head_keys = [f'{layer:02d}.{head:02d}.{mat}' for mat in ['Q', 'K', 'V', 'O']]
+    keys = sorted(subspaces.keys())
+    projectors = {key: get_projector(subspaces[key]) for key in tqdm(head_keys)}
+    for i, key1 in enumerate(tqdm(head_keys)):
+        for j, key2 in enumerate(keys):
+            retval[key1, key2] = relation_score2(projectors[key1], subspaces[key2])
+
+    fig, axes = plt.subplots(4, 4, figsize=(20, 20))
+    for imat, mat in enumerate(['K', 'Q', 'O', 'V']):
+        for imat2, mat2 in enumerate(['K', 'Q', 'O', 'V']):
+            key = f'{layer:02d}.{head:02d}.{mat}'
+            im = np.zeros((12, 12))
+            for layer2 in range(model.cfg.n_layers):
+                for head2 in range(model.cfg.n_heads):
+                    key2 = f'{layer2:02d}.{head2:02d}.{mat2}'
+                    score = retval[key, key2]
+                    if score > thresh:
+                        im[layer2, head2] = retval[key, key2]
+                    else:
+                        im[layer2, head2] = np.nan
+            show_layer_head_image(im=im, ax=axes[imat, imat2])
+            axes[imat, imat2].set_title(f'{key} vs XX.XX.{mat2}')
+
+
+
 
 def get_relation_score_baseline():
     n_subspaces = 144 * 4 # 144 attention heads, 4 subspaces per head
@@ -112,26 +142,6 @@ def analyze_scores(scores, *, lower_thresh, upper_thresh):
         plt.vlines([lower_thresh, upper_thresh], 0, max_count, color='red', label='random')
         plt.title(f'{key} {np.mean(scores2):.2f}+-{np.std(scores2):.2f}')
 
-    if 0:
-        subgraphs = []
-        for key in all_subspace_keys:
-            if key not in gf:
-                continue
-            nbrs = gf.neighbors(key)
-            gf2 = nx.Graph()
-            for nbr in nbrs:
-                gf2.add_edge(key, nbr, weight=gf[key][nbr]['weight'])
-            if nbrs:
-                subgraphs.append((key, gf2))
-
-        subgraphs = sorted(subgraphs, key=lambda x: x[0])
-        nrows = int(np.ceil(np.sqrt(len(subgraphs))))
-        fig, axes = plt.subplots(nrows, nrows, figsize=(nrows * 3, nrows * 3))
-        for i, ((key, gf2), ax) in enumerate(zip(subgraphs, axes.flatten())):
-            pos = nx.fruchterman_reingold_layout(gf2)
-            nx.draw(gf2, with_labels=True, pos=pos, node_size=1000, font_size=8, width=0.1, node_color='red', ax=ax)
-            ax.set_title(f'{key}')
-
     nrows = int(np.ceil(np.sqrt(len(all_subspace_keys))))
     fig, axes = plt.subplots(nrows, nrows, figsize=(nrows * 3, nrows * 3))
     all_subspace_keys = sorted(all_subspace_keys)
@@ -161,7 +171,14 @@ def analyze_scores(scores, *, lower_thresh, upper_thresh):
         ax.colorbar = plt.colorbar(ax.images[0], ax=ax)
     plt.tight_layout()
 
-
+def show_all_head_plots(*, model, layer, head):
+    """Show all the plots for a given head."""
+    scores = get_head_subspace_scores(model=model, layer=layer, head=head)
+    for mat in 'KQOV':
+        plt.figure(figsize=(10, 10))
+        plt.title(f'{layer:02d}.{head:02d}.{mat}')
+        plt.imshow(scores[mat], vmin=0, vmax=1, cmap='turbo', interpolation='nearest')
+        plt.colorbar()
 
 def describe_head_subspace_relations(*, model, scores, layer, head, thresh=0.5, omit_uninteresting=True):
     """Describe the relations between the subspaces of a given head and those of all other heads."""
@@ -203,9 +220,10 @@ def describe_head_subspace_relations(*, model, scores, layer, head, thresh=0.5, 
 
     return relevant_subspaces
 
-def describe_subspace_distinctions(*, model, key, freqs, lens='logit', trials=10, 
+def describe_subspace_distinctions(*, model, key, freqs, lens='logit', trials=10, seed=0,
                                     prevent_numbers=True, temperature=2.0):
     """Qualitatively describe the distinctions a subspace is capable of making."""
+    device = get_device(model)
     layer, head, mat = key.split('.')
     layer, head = int(layer), int(head)
     assert mat in ['Q', 'K', 'O', 'V']
@@ -222,6 +240,7 @@ def describe_subspace_distinctions(*, model, key, freqs, lens='logit', trials=10
                 freqs[i] = 0
     modified_freqs = freqs ** (1 / temperature)
     modified_freqs = modified_freqs / modified_freqs.sum()
+    np.random.seed(seed)
     for trial in tqdm(range(trials)):
         #tokens = np.random.choice(most_common_tokens, nsamples)
         tokens = np.random.choice(50257, nsamples, p=modified_freqs)
@@ -271,6 +290,32 @@ def test_subspace_relations():
     orth_score = relation_score2(projector, subspace2)
     print(f'Orthogonal subspace score: {orth_score:.3f}')
 
+
+def eval_plot(all_evals, titles):
+    fig, axes = plt.subplots(12, 12, subplot_kw=dict(polar=True), figsize=(100, 100))
+    for (evals, ax, title) in zip(all_evals, axes.ravel(), titles):
+        radius = np.abs(evals)
+        theta = np.arctan2(evals.imag, evals.real)
+        ax.scatter(theta, radius)
+        ax.set_rscale('symlog')
+        ax.set_title(title)
+        ax.set_rlim(0, 2 * radius.max())
+
+def plot_wov_eigenvalues(model):
+    all_evals = []
+    titles = []
+    for layer in range(model.cfg.n_layers):        
+        attn = model.blocks[layer].attn
+        wo = attn.W_O
+        wv = attn.W_V
+        for head in range(model.cfg.n_heads):
+            wo_head = wo[head]
+            wv_head = wv[head]
+            wvo = wo_head @ wv_head
+            evals = np.linalg.eigvals(wvo.detach().cpu().numpy())
+            all_evals.append(evals)
+            titles.append(f'WOV evals, attn.{layer:02d}.{head:02d}')
+    eval_plot(all_evals, titles)
 
 
 if __name__ == '__main__':

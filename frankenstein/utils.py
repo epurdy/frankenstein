@@ -40,8 +40,7 @@ def get_device(model):
     return next(model.parameters()).device
 
 def get_frequency(*, model, dataset):
-    print(model.cfg)
-    counts = np.zeros(50257) # todo: get this from the model
+    counts = np.zeros(model.cfg.d_vocab)
     for text in tqdm(dataset):
         tokens = model.to_tokens(text).cpu().numpy()
         for token in tokens:
@@ -69,3 +68,27 @@ def detect_outliers(vals):
     modified_z_score = 0.6745 * diff / mad
     retval = modified_z_score > 3.5
     return retval
+
+
+def show_layer_head_image(*, im, ax):
+    nlayers, nheads = im.shape
+
+    ax.imshow(im, interpolation='none', aspect='equal')
+
+    # Major ticks
+    ax.set_xticks(np.arange(nheads))
+    ax.set_yticks(np.arange(nlayers))
+
+    # Labels for major ticks
+    ax.set_xticklabels(np.arange(nheads))
+    ax.set_yticklabels(np.arange(nlayers))
+
+    # Minor ticks
+    ax.set_xticks(np.arange(-.5, nheads, 1), minor=True)
+    ax.set_yticks(np.arange(-.5, nlayers, 1), minor=True)
+
+    # Gridlines based on minor ticks
+    ax.grid(which='minor', color='k', linestyle='-', linewidth=2)
+
+    # Remove minor ticks
+    ax.tick_params(which='minor', bottom=False, left=False)
