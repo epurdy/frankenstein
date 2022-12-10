@@ -135,10 +135,33 @@ class OrthogonalDecomposition:
             elif score < 0:
                 self.tot_neg[idx] += score
                 self.ax.bar(idx, -score, bottom=self.tot_neg[idx], color=color)
-        self.last_block = iblock                
+        self.last_block = iblock           
 
+    def plot_heatmap(self, tokens):
+        for posn, token in enumerate(tokens):
+            im = np.zeros((len(self.basis_direction_names[posn]), len(self.basis_direction_names[posn])))
+            fig, ax = plt.subplots(figsize=(5, 5))
+            if posn < self.ntokens - 1:
+                ax.set_title(f'RS usage, token {posn} ({token} -> {tokens[posn+1]}))')
+            else:
+                ax.set_title(f'RS usage, token {posn} ({token}))')
+            ax.set_xticks(range(len(self.basis_direction_names[posn])), self.basis_direction_names[posn], rotation=90)
+            ax.set_yticks(range(len(self.basis_direction_names[posn])), self.basis_direction_names[posn])
+            for i, block in enumerate(self.blocks[posn]):
+                termname, dirname, score = block
+                idir = self.basis_direction_names[posn].index(dirname)
+                iterm = self.basis_direction_names[posn].index(termname)
+                im[iterm, idir] = score  
+            im = im / np.linalg.norm(im, axis=0)
+            # add a heatmap with zero as the midpoint              
+            max_score = np.nanmax(np.abs(im))
+            ax.imshow(im, cmap='RdBu_r', vmin=-max_score, vmax=max_score)
+            # add a colorbar
+            plt.colorbar(ax.images[0], ax=ax)
+            ax.set_xlabel('basis direction')
+            ax.set_ylabel('term')
 
-def compute_orthogonal_decomposition(*, model, text, make_plot=False):
+def compute_orthogonal_decomposition(*, model, text, make_plot=False, make_heatmap=False):
     tokens = get_tokens(model=model, text=text)
     print(tokens.shape)
     str_tokens = get_str_tokens(model=model, text=text)
@@ -154,6 +177,8 @@ def compute_orthogonal_decomposition(*, model, text, make_plot=False):
         od.add_term(f'mlp.{layer}', mlp_term)
     if make_plot:
         od.plot(tokens=str_tokens)
+    if make_heatmap:
+        od.plot_heatmap(tokens=str_tokens)
     return od
 
 

@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from frankenstein.utils import get_projector, get_device, show_layer_head_image
+from frankenstein.utils import get_projector, get_device, show_layer_head_image, get_tokens, get_str_tokens
 
 
 def get_attention_head_subspaces(model):
@@ -243,7 +243,7 @@ def describe_subspace_distinctions(*, model, key, freqs, lens='logit', trials=10
     np.random.seed(seed)
     for trial in tqdm(range(trials)):
         #tokens = np.random.choice(most_common_tokens, nsamples)
-        tokens = np.random.choice(50257, nsamples, p=modified_freqs)
+        tokens = np.random.choice(50257, nsamples, p=modified_freqs, replace=False)
         tokens = torch.tensor(tokens, device=device)
         if lens == 'logit':
             vecs = model.W_U.T[tokens]
@@ -276,6 +276,67 @@ def describe_subspace_distinctions(*, model, key, freqs, lens='logit', trials=10
             'diff=%.2f' % proj_cosim,
             f'"{model.tokenizer.decode(token1)}" "{model.tokenizer.decode(token2)}"')
 
+def describe_attention_io_pairs(*, model, text, freqs, layer, head, temperature=2, prevent_numbers=True):
+    tokens = get_tokens(model=model, text=text)
+    str_tokens = get_str_tokens(model=model, text=text)
+    wu = model.W_U.T
+    print(wu.shape)
+    wo = model.blocks[layer].attn.W_O[head]
+    wv = model.blocks[layer].attn.W_V[head]
+    v_projector = get_projector(wv.T)
+    o_projector = get_projector(wo)
+
+    if prevent_numbers:
+        freqs = freqs.copy()
+        for i in range(50257):
+            if model.tokenizer.decode([i]).strip().isnumeric():
+                freqs[i] = 0
+    modified_freqs = freqs ** (1 / temperature)
+    modified_freqs = modified_freqs / modified_freqs.sum()
+
+    torch.random.manual_seed(0)
+    description_tokens = torch.multinomial(torch.tensor(modified_freqs), 1000, replacement=False)
+    description_tokens = sorted(description_tokens.numpy()) #+ list(tokens.numpy())
+    description_tokens = description_tokens + list(tokens[0].numpy())
+    wu = wu[description_tokens]
+
+    cosims = F.cosine_similarity(wu.unsqueeze(0), wu.unsqueeze(1), dim=2)
+    diffs = wu.unsqueeze(0) - wu.unsqueeze(1)
+    normdiffs = F.normalize(diffs, dim=2)
+    #print('cosims', cosims.shape)
+    print('diffs', diffs.shape)
+
+    model.set_use_attn_result(True)
+    logits, cache = model.run_with_cache(tokens)
+    attn_input = cache[f'blocks.{layer}.ln1.hook_normalized'].squeeze(0)
+    print(cache[f'blocks.{layer}.attn.hook_result'].shape)
+    attn_output = cache[f'blocks.{layer}.attn.hook_result'].squeeze(0)[:, head, :]
+    print(attn_input.shape)
+    print(attn_output.shape)
+    attn_input = attn_input.unbind(0)
+    attn_output = attn_output.unbind(0)
+    for i, (input, output) in enumerate(zip(attn_input, attn_output)):
+        print(v_projector.shape)
+        input = v_projector @ input
+        input_mapped = wo @ input
+        projdiffs = F.cosine_similarity(diffs, input.unsqueeze(0).unsqueeze(0), dim=2).abs()
+        fom = torch.log(projdiffs + 1) + 0.5 * torch.log(cosims + 2)
+        fom = fom - fom.diag().diag()
+        ibest = fom.argmax()
+        ibest1, ibest2 = np.unravel_index(ibest, fom.shape)
+        token1 = model.tokenizer.decode([description_tokens[ibest1]])
+        token2 = model.tokenizer.decode([description_tokens[ibest2]])
+        print(f'V[{str_tokens[i]}] "{token1}" "{token2}"', input.norm().item(), input_mapped.norm().item())
+
+        if i < len(attn_input) - 1:
+            projdiffs = F.cosine_similarity(diffs, output.unsqueeze(0).unsqueeze(0), dim=2).abs()
+            fom = torch.log(projdiffs + 1) + 0.5 * torch.log(cosims + 2)
+            fom = fom - fom.diag().diag()
+            ibest = fom.argmax()
+            ibest1, ibest2 = np.unravel_index(ibest, fom.shape)
+            token1 = model.tokenizer.decode([description_tokens[ibest1]])
+            token2 = model.tokenizer.decode([description_tokens[ibest2]])
+            print(f'O[{str_tokens[i]} -> {str_tokens[i + 1]}] "{token1}" "{token2}"', output.norm().item())
 
 
 def test_subspace_relations():
