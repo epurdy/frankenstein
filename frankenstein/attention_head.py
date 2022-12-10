@@ -80,8 +80,11 @@ class DossierMaker:
         positional_score = describe_attention_patterns_positional(model=self.model, layer=layer, head=head, 
                                                                   path=attention_pattern_image)
 
-        embedding_attention_pairs = describe_embedding_attention_patterns(model=self.model, 
-                                                                       layer=layer, head=head, freqs=self.freqs)
+        kq_pairs = describe_attention_patterns_qk(model=self.model, 
+                                                        layer=layer, head=head, freqs=self.freqs)
+
+        vo_pairs = describe_interpretants_ov(model=self.model, layer=layer, head=head, freqs=self.freqs)
+
 
         distinctions_text = {}
         for mat in MAT_ORDER:
@@ -152,12 +155,12 @@ class DossierMaker:
                     <td><textarea rows="100" cols="40">{distinctions_text['O']}</textarea></td>
                 </tr>
                 <tr>
-                    <td colspan="2">QK Pairs</td>
-                    <td colspan="2">OV Pairs</td>
+                    <td colspan="2">KQ Pairs</td>
+                    <td colspan="2">VO Pairs</td>
                 </tr>
                 <tr>
-                    <td colspan="2"><textarea rows="100" cols="40">{embedding_attention_pairs}</textarea></td>
-                    <td colspan="2"><textarea rows="100" cols="40"></textarea></td>
+                    <td colspan="2"><textarea rows="100" cols="40">{kq_pairs}</textarea></td>
+                    <td colspan="2"><textarea rows="100" cols="40">{vo_pairs}</textarea></td>
                 </tr>
             </table>
         </body>
@@ -520,7 +523,7 @@ def describe_attention_patterns_positional(*, model, layer, head, path):
     print(f'Layer {layer:02d}.{head:02d} score: {score:.2f}')
     return score
 
-def describe_embedding_attention_patterns(model, layer, head, freqs):
+def describe_attention_patterns_qk(*, model, layer, head, freqs):
     wq = model.blocks[layer].attn.W_Q[head].detach().numpy()
     wk = model.blocks[layer].attn.W_K[head].detach().numpy()
     qk = np.matmul(wq, wk.T)
@@ -538,7 +541,31 @@ def describe_embedding_attention_patterns(model, layer, head, freqs):
     pairs = []
     for tok1, tok2 in zip(str_tok1s, str_tok2s):
         print(tok1, tok2)
-        pairs.append(f'"{tok1}" "{tok2}"')
+        pairs.append(f'"{tok2}" "{tok1}"')
+    return '\n'.join(pairs)
+
+def describe_interpretants_ov(*, model, layer, head, freqs):
+    wo = model.blocks[layer].attn.W_O[head].detach().numpy()
+    wv = model.blocks[layer].attn.W_V[head].detach().numpy()
+    ov = np.matmul(wo.T, wv.T)
+    we = model.W_E.detach().numpy()
+    wu = model.W_U.detach().numpy().T
+    frequent_tokens = (freqs > 1e-5).nonzero()[0]
+    print(len(frequent_tokens))
+    we = we[frequent_tokens, :]
+    wu = wu[frequent_tokens, :]
+    wuovwe = np.matmul(wu, np.matmul(ov, we.T))
+    print(wuovwe.shape)
+    idxs = np.argpartition(wuovwe.ravel(), -100)[-100:]
+    tok1_idxs, tok2_idxs = np.unravel_index(idxs, wuovwe.shape)
+    tok1s = frequent_tokens[tok1_idxs]
+    tok2s = frequent_tokens[tok2_idxs]
+    str_tok1s = [model.tokenizer.decode([tok]) for tok in tok1s]
+    str_tok2s = [model.tokenizer.decode([tok]) for tok in tok2s]
+    pairs = []
+    for tok1, tok2 in zip(str_tok1s, str_tok2s):
+        print(tok1, tok2)
+        pairs.append(f'"{tok2}" "{tok1}"')
     return '\n'.join(pairs)
 
 
