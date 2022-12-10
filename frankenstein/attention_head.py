@@ -26,6 +26,7 @@ class DossierMaker:
         self.texts = texts
         self.num_texts = num_texts
         self.preparation_done = False
+        self.make_index()
         self.prepare_dossiers()
 
     def prepare_dossiers(self):
@@ -35,7 +36,31 @@ class DossierMaker:
         self.projectors = {key: get_projector(subspace) for key, subspace in self.subspaces.items()}
         self.preparation_done = True
 
-    def dossier(self, *, layer, head, path):
+    def make_index(self, *, path='dossiers'):
+        index_file = os.path.join(path, 'index.html')
+        with open(index_file, 'w') as f:
+            f.write('''<html>
+            <head>
+            <style>
+            table, th, td {
+                border: 1px solid black;
+                border-collapse: collapse;
+                padding: 30px;
+            }
+            </style>
+            <body>
+            <table>
+            ''')
+            for layer in range(self.model.cfg.n_layers):
+                f.write('<tr>\n')
+                for head in range(self.model.cfg.n_heads):
+                    f.write(f'<td><a href="dossier_{layer:02d}_{head:02d}/index.html">')
+                    f.write(f'attn.{layer:02d}.{head:02d}</a></td>\n')
+                f.write('</tr>\n')
+            f.write('</table></body></html>\n')
+
+    def dossier(self, *, layer, head, path='dossiers'):
+        path = os.path.join(path, f'dossier_{layer:02d}_{head:02d}')
         if os.path.exists(path):
             shutil.rmtree(path)
         os.makedirs(path)
@@ -48,6 +73,15 @@ class DossierMaker:
         subspace_relations_image = os.path.join(path, 'subspace_relations.png')
         plot_subspace_relation_scores(model=self.model, scores=scores, layer=layer, head=head, 
                                         path=subspace_relations_image)
+        relevant_subspaces = describe_head_subspace_relations(model=self.model, layer=layer, head=head,
+                                                                scores=scores)
+
+        attention_pattern_image = os.path.join(path, 'attention_pattern.png')
+        positional_score = describe_attention_patterns_positional(model=self.model, layer=layer, head=head, 
+                                                                  path=attention_pattern_image)
+
+        embedding_attention_pairs = describe_embedding_attention_patterns(model=self.model, 
+                                                                       layer=layer, head=head, freqs=self.freqs)
 
         distinctions_text = {}
         for mat in MAT_ORDER:
@@ -55,23 +89,43 @@ class DossierMaker:
             mat_text = describe_subspace_distinctions(model=self.model, key=key, freqs=self.freqs, trials=1)
             distinctions_text[mat] = mat_text
 
-        mat_text = 'TODO'
-
         head_name = f'{layer:02d}.{head:02d}'                                                    
+
+        q_links = []
+        for key2, score2 in relevant_subspaces[make_key_name(layer=layer, head=head, mat='Q')].items():
+            layer2, head2, mat2 = key2.split('.')
+            q_links.append(f'<a href="../dossier_{layer2}_{head2}/index.html">{key2}</a> ({score2:.3f})<br />')
+        q_links = '\n'.join(q_links)
+        k_links = []
+        for key2, score2 in relevant_subspaces[make_key_name(layer=layer, head=head, mat='K')].items():
+            layer2, head2, mat2 = key2.split('.')
+            k_links.append(f'<a href="../dossier_{layer2}_{head2}/index.html">{key2}</a> ({score2:.3f})<br />')
+        k_links = '\n'.join(k_links)
+        v_links = []
+        for key2, score2 in relevant_subspaces[make_key_name(layer=layer, head=head, mat='V')].items():
+            layer2, head2, mat2 = key2.split('.')
+            v_links.append(f'<a href="../dossier_{layer2}_{head2}/index.html">{key2}</a> ({score2:.3f})<br />')
+        v_links = '\n'.join(v_links)
+        o_links = []
+        for key2, score2 in relevant_subspaces[make_key_name(layer=layer, head=head, mat='O')].items():
+            layer2, head2, mat2 = key2.split('.')
+            o_links.append(f'<a href="../dossier_{layer2}_{head2}/index.html">{key2}</a> ({score2:.3f})<br />')
+        o_links = '\n'.join(o_links)
 
         html = f'''
         <html>
         <head>
             <title>Attention Head Dossier - attn.{head_name}</title>
             <style>
-                img {{ max-width: 400px; float: left; }}
+                img {{ max-width: 800px; float: left; }}
             </style>
         </head>
         <body>
             <h1>Attention Head Dossier - attn.{head_name}</h1>
+            <h2>Positional score {positional_score:.2f} (max ~11K)</h2>
             <img src="{os.path.basename(wov_evals_image)}" />
             <img src="{os.path.basename(subspace_relations_image)}" />
-            <h2>Subspace Distinctions</h2>
+            <img src="{os.path.basename(attention_pattern_image)}" />
             <table>
                 <tr>
                     <th>Q</th>
@@ -80,10 +134,30 @@ class DossierMaker:
                     <th>O</th>
                 </tr>
                 <tr>
+                    <td colspan="4">Subspace Links</td>
+                </tr>
+                <tr>
+                    <td>{q_links}</td>
+                    <td>{k_links}</td>
+                    <td>{v_links}</td>
+                    <td>{o_links}</td>
+                </tr>
+                <tr>
+                    <td colspan="4">Subspace Distinctions</td>
+                </tr>
+                <tr>
                     <td><textarea rows="100" cols="40">{distinctions_text['Q']}</textarea></td>
                     <td><textarea rows="100" cols="40">{distinctions_text['K']}</textarea></td>
                     <td><textarea rows="100" cols="40">{distinctions_text['V']}</textarea></td>
                     <td><textarea rows="100" cols="40">{distinctions_text['O']}</textarea></td>
+                </tr>
+                <tr>
+                    <td colspan="2">QK Pairs</td>
+                    <td colspan="2">OV Pairs</td>
+                </tr>
+                <tr>
+                    <td colspan="2"><textarea rows="100" cols="40">{embedding_attention_pairs}</textarea></td>
+                    <td colspan="2"><textarea rows="100" cols="40"></textarea></td>
                 </tr>
             </table>
         </body>
@@ -126,7 +200,7 @@ def get_subspace_relation_scores(*, model, layer=None, head=None, subspaces=None
         head_keys = [f'{layer:02d}.{head:02d}.{mat}' for mat in MAT_ORDER]
  
     if projectors is None:
-        projectors = {key: get_projector(subspaces[key]) for key in tqdm(head_keys)}
+        projectors = {key: get_projector(subspaces[key]) for key in tqdm(keys)}
 
     for key1 in tqdm(head_keys):
         for key2 in keys:
@@ -424,10 +498,54 @@ def plot_all_wov_eigenvalues(model):
         single_eigenvalue_plot(evals=evals, title=title, ax=ax)
 
 
+def describe_attention_patterns_positional(*, model, layer, head, path):
+    wq = model.blocks[layer].attn.W_Q[head].detach().numpy()
+    wk = model.blocks[layer].attn.W_K[head].detach().numpy()
+    qk = np.matmul(wq, wk.T)
+    pos = model.W_pos.detach().numpy()
+    pos_qk_pos = np.matmul(np.matmul(pos, qk), pos.T)
+    pos_qk_pos = pos_qk_pos - np.tril(pos_qk_pos)
+    im = pos_qk_pos.copy()
+    im[pos_qk_pos == 0] = np.nan
+    fig = plt.figure()
+    plt.title(f'Positional preference for attention head {layer:02d}.{head:02d}')
+    max_score = np.abs(pos_qk_pos).max()
+    plt.imshow(im, origin='lower', cmap='RdBu_r', vmin=-max_score, vmax=max_score)
+    plt.xlabel('Query')
+    plt.ylabel('Key')
+    plt.colorbar()
+    if path:
+        fig.savefig(path)
+    score = np.linalg.norm(pos_qk_pos)
+    print(f'Layer {layer:02d}.{head:02d} score: {score:.2f}')
+    return score
+
+def describe_embedding_attention_patterns(model, layer, head, freqs):
+    wq = model.blocks[layer].attn.W_Q[head].detach().numpy()
+    wk = model.blocks[layer].attn.W_K[head].detach().numpy()
+    qk = np.matmul(wq, wk.T)
+    we = model.W_E.detach().numpy()
+    frequent_tokens = (freqs > 1e-5).nonzero()[0]
+    print(len(frequent_tokens))
+    we = we[frequent_tokens, :]
+    weqkwe = np.matmul(we, np.matmul(qk, we.T))
+    idxs = np.argpartition(weqkwe.ravel(), -100)[-100:]
+    tok1_idxs, tok2_idxs = np.unravel_index(idxs, weqkwe.shape)
+    tok1s = frequent_tokens[tok1_idxs]
+    tok2s = frequent_tokens[tok2_idxs]
+    str_tok1s = [model.tokenizer.decode([tok]) for tok in tok1s]
+    str_tok2s = [model.tokenizer.decode([tok]) for tok in tok2s]
+    pairs = []
+    for tok1, tok2 in zip(str_tok1s, str_tok2s):
+        print(tok1, tok2)
+        pairs.append(f'"{tok1}" "{tok2}"')
+    return '\n'.join(pairs)
+
 
 if __name__ == '__main__':
     model = get_model(name='gpt2', device='cpu')
     texts = get_openwebtext_dataset()
     dossier_maker = DossierMaker(model=model, texts=texts)
-    dossier_maker.prepare_dossiers()
-    dossier_maker.dossier(layer=9, head=9, path='dossier_9_9')
+    for layer in range(model.cfg.n_layers):
+        for head in range(model.cfg.n_heads):
+            dossier_maker.dossier(layer=layer, head=head)
