@@ -39,14 +39,58 @@ class DossierMaker:
         if os.path.exists(path):
             shutil.rmtree(path)
         os.makedirs(path)
-        plot_wov_eigenvalues(model=self.model, layer=layer, head=head, path=path)
+        index_file = os.path.join(path, 'index.html')
+        wov_evals_image = os.path.join(path, 'wov_eigenvalues.png')
+        plot_wov_eigenvalues(model=self.model, layer=layer, head=head, path=wov_evals_image)
         scores = get_subspace_relation_scores(model=self.model, layer=layer, head=head,
                                               subspaces=self.subspaces,
                                               projectors=self.projectors)
-        plot_subspace_relation_scores(model=self.model, scores=scores, layer=layer, head=head, path=path)
+        subspace_relations_image = os.path.join(path, 'subspace_relations.png')
+        plot_subspace_relation_scores(model=self.model, scores=scores, layer=layer, head=head, 
+                                        path=subspace_relations_image)
+
+        distinctions_text = {}
         for mat in MAT_ORDER:
             key = make_key_name(layer=layer, head=head, mat=mat)
-            describe_subspace_distinctions(model=self.model, key=key, freqs=self.freqs, trials=1, path=path)
+            mat_text = describe_subspace_distinctions(model=self.model, key=key, freqs=self.freqs, trials=1)
+            distinctions_text[mat] = mat_text
+
+        mat_text = 'TODO'
+
+        head_name = f'{layer:02d}.{head:02d}'                                                    
+
+        html = f'''
+        <html>
+        <head>
+            <title>Attention Head Dossier - attn.{head_name}</title>
+            <style>
+                img {{ max-width: 400px; float: left; }}
+            </style>
+        </head>
+        <body>
+            <h1>Attention Head Dossier - attn.{head_name}</h1>
+            <img src="{os.path.basename(wov_evals_image)}" />
+            <img src="{os.path.basename(subspace_relations_image)}" />
+            <h2>Subspace Distinctions</h2>
+            <table>
+                <tr>
+                    <th>Q</th>
+                    <th>K</th>
+                    <th>V</th>
+                    <th>O</th>
+                </tr>
+                <tr>
+                    <td><textarea rows="100" cols="40">{distinctions_text['Q']}</textarea></td>
+                    <td><textarea rows="100" cols="40">{distinctions_text['K']}</textarea></td>
+                    <td><textarea rows="100" cols="40">{distinctions_text['V']}</textarea></td>
+                    <td><textarea rows="100" cols="40">{distinctions_text['O']}</textarea></td>
+                </tr>
+            </table>
+        </body>
+        </html>
+        '''
+        with open(index_file, 'w') as f:
+            f.write(html)
 
 
 def get_attention_head_subspaces(model):
@@ -91,7 +135,7 @@ def get_subspace_relation_scores(*, model, layer=None, head=None, subspaces=None
     return retval
 
 
-def plot_subspace_relation_scores(*, model, scores, head, layer, thresh=0.5):
+def plot_subspace_relation_scores(*, model, scores, head, layer, path=None, thresh=0.5):
     fig, axes = plt.subplots(4, 4, figsize=(20, 20))
     
     for imat, mat in enumerate(MAT_ORDER):
@@ -108,6 +152,9 @@ def plot_subspace_relation_scores(*, model, scores, head, layer, thresh=0.5):
                         im[layer2, head2] = np.nan
             show_layer_head_image(im=im, ax=axes[imat, imat2])
             axes[imat, imat2].set_title(f'{key} vs XX.XX.{mat2}')
+
+    if path is not None:
+        plt.savefig(path)
 
 
 def get_relation_score_baseline(model):
@@ -224,6 +271,7 @@ def describe_subspace_distinctions(*, model, key, freqs, lens='logit', trials=10
     modified_freqs = freqs ** (1 / temperature)
     modified_freqs = modified_freqs / modified_freqs.sum()
     np.random.seed(seed)
+
     for trial in tqdm(range(trials)):
         #tokens = np.random.choice(most_common_tokens, nsamples)
         tokens = np.random.choice(50257, nsamples, p=modified_freqs, replace=False)
@@ -252,12 +300,18 @@ def describe_subspace_distinctions(*, model, key, freqs, lens='logit', trials=10
                                 proj_cosims[good1, good2].item(),
                                 tokens[good1], tokens[good2]))
 
+    retval = []
     best_pairs.sort(reverse=True)
     for fom, cosim, proj_cosim, token1, token2 in best_pairs[:100]:
+        str1 = model.tokenizer.decode(token1)
+        str2 = model.tokenizer.decode(token2)
+        retval.append(f'"{str1}" "{str2}"')
         print(key, '%.2f' % fom, 
             'sim=%.2f' % cosim,
             'diff=%.2f' % proj_cosim,
-            f'"{model.tokenizer.decode(token1)}" "{model.tokenizer.decode(token2)}"')
+            f'"{str1}" "{str2}"')
+
+    return '\n'.join(retval)
 
 
 def describe_attention_io_pairs(*, model, text, freqs, layer, head, temperature=2, prevent_numbers=True):
@@ -348,10 +402,12 @@ def compute_wov_eigenvalues(*, model, layer, head):
     evals = np.linalg.eigvals(wvo.detach().cpu().numpy())
     return evals
 
-def plot_wov_eigenvalues(*, model, layer, head):
+def plot_wov_eigenvalues(*, model, layer, head, path):
     evals = compute_wov_eigenvalues(model=model, layer=layer, head=head)
     fig, ax = plt.subplots(subplot_kw=dict(polar=True), figsize=(10, 10))
     single_eigenvalue_plot(evals=evals, title=f'WOV evals, attn.{layer:02d}.{head:02d}', ax=ax)
+    if path:
+        fig.savefig(path)
 
 
 def plot_all_wov_eigenvalues(model):
@@ -372,6 +428,6 @@ def plot_all_wov_eigenvalues(model):
 if __name__ == '__main__':
     model = get_model(name='gpt2', device='cpu')
     texts = get_openwebtext_dataset()
-    dossier_maker = DossierMaker(model=model, texts=texts[:10])
+    dossier_maker = DossierMaker(model=model, texts=texts)
     dossier_maker.prepare_dossiers()
     dossier_maker.dossier(layer=9, head=9, path='dossier_9_9')
