@@ -92,3 +92,19 @@ def show_layer_head_image(*, im, ax):
 
     # Remove minor ticks
     ax.tick_params(which='minor', bottom=False, left=False)
+
+def sample_from_model(*, model, prompt, ntokens=100, temp=0.5):
+    torch.random.manual_seed(0)
+    model.reset_hooks()
+    text = model.generate(prompt, max_new_tokens=ntokens, temperature=temp, freq_penalty=1.0)
+    print(text)
+    return text
+
+
+def ablate_head_hook(result, hook, head):
+    result[:, :, head, :] = 0
+    return result
+
+def ablate_mlp_hook(result, hook):
+    result[:, :, :] = 0
+    return result

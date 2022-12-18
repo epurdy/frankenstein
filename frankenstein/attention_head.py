@@ -1,6 +1,7 @@
 from collections import defaultdict
 import os
 import shutil
+from functools import partial
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -11,7 +12,8 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from frankenstein.utils import (get_projector, get_device, show_layer_head_image, get_tokens, get_str_tokens,
-                                get_frequency, get_model, get_openwebtext_dataset)  
+                                get_frequency, get_model, get_openwebtext_dataset, ablate_head_hook,
+                                ablate_mlp_hook, sample_from_model)
 
 
 MAT_ORDER = list('QKVO')
@@ -26,6 +28,7 @@ class DossierMaker:
         self.texts = texts
         self.num_texts = num_texts
         self.preparation_done = False
+        self.prompt = 'What I really want for Christmas is'
         self.make_index()
         self.prepare_dossiers()
 
@@ -34,6 +37,9 @@ class DossierMaker:
         self.freqs = get_frequency(dataset=self.texts, model=self.model)
         self.subspaces = get_attention_head_subspaces(self.model)
         self.projectors = {key: get_projector(subspace) for key, subspace in self.subspaces.items()}
+
+        self.normal_sample = sample_from_model(model=self.model, prompt=self.prompt)
+
         self.preparation_done = True
 
     def make_index(self, *, path='dossiers'):
@@ -65,8 +71,12 @@ class DossierMaker:
             shutil.rmtree(path)
         os.makedirs(path)
         index_file = os.path.join(path, 'index.html')
+
         wov_evals_image = os.path.join(path, 'wov_eigenvalues.png')
         plot_wov_eigenvalues(model=self.model, layer=layer, head=head, path=wov_evals_image)
+        wqk_evals_image = os.path.join(path, 'wqk_eigenvalues.png')
+        plot_wqk_eigenvalues(model=self.model, layer=layer, head=head, path=wqk_evals_image)
+
         scores = get_subspace_relation_scores(model=self.model, layer=layer, head=head,
                                               subspaces=self.subspaces,
                                               projectors=self.projectors)
@@ -84,6 +94,9 @@ class DossierMaker:
                                                         layer=layer, head=head, freqs=self.freqs)
 
         vo_pairs = describe_interpretants_ov(model=self.model, layer=layer, head=head, freqs=self.freqs)
+
+        ablation_sample = sample_from_head_ablated_model(model=self.model, layer=layer, head=head,
+                                                        prompt=self.prompt)
 
 
         distinctions_text = {}
@@ -126,10 +139,19 @@ class DossierMaker:
         <body>
             <h1>Attention Head Dossier - attn.{head_name}</h1>
             <h2>Positional score {positional_score:.2f} (max ~11K)</h2>
+            <img src="{os.path.basename(wqk_evals_image)}" />
             <img src="{os.path.basename(wov_evals_image)}" />
             <img src="{os.path.basename(subspace_relations_image)}" />
             <img src="{os.path.basename(attention_pattern_image)}" />
             <table>
+                <tr>
+                    <th colspan="2">Normal sample</th>
+                    <th colspan="2">Ablated sample</th>
+                </tr>
+                <tr>
+                    <td colspan="2">{self.normal_sample}</td>
+                    <td colspan="2">{ablation_sample}</td>
+                </tr>
                 <tr>
                     <th>Q</th>
                     <th>K</th>
@@ -479,10 +501,29 @@ def compute_wov_eigenvalues(*, model, layer, head):
     evals = np.linalg.eigvals(wvo.detach().cpu().numpy())
     return evals
 
+def compute_wqk_eigenvalues(*, model, layer, head):
+    attn = model.blocks[layer].attn
+    wq = attn.W_Q
+    wk = attn.W_K
+    wq_head = wq[head]
+    wk_head = wk[head]
+    kq = wk_head.T @ wq_head
+    evals = np.linalg.eigvals(kq.detach().cpu().numpy())
+    return evals
+
+
 def plot_wov_eigenvalues(*, model, layer, head, path):
     evals = compute_wov_eigenvalues(model=model, layer=layer, head=head)
     fig, ax = plt.subplots(subplot_kw=dict(polar=True), figsize=(10, 10))
     single_eigenvalue_plot(evals=evals, title=f'WOV evals, attn.{layer:02d}.{head:02d}', ax=ax)
+    if path:
+        fig.savefig(path)
+
+
+def plot_wqk_eigenvalues(*, model, layer, head, path):
+    evals = compute_wqk_eigenvalues(model=model, layer=layer, head=head)
+    fig, ax = plt.subplots(subplot_kw=dict(polar=True), figsize=(10, 10))
+    single_eigenvalue_plot(evals=evals, title=f'WQK evals, attn.{layer:02d}.{head:02d}', ax=ax)
     if path:
         fig.savefig(path)
 
@@ -567,6 +608,23 @@ def describe_interpretants_ov(*, model, layer, head, freqs):
         print(tok1, tok2)
         pairs.append(f'"{tok2}" "{tok1}"')
     return '\n'.join(pairs)
+
+
+def sample_from_head_ablated_model(*, model, layer, head, prompt, ntokens=100, temp=0.5):
+    torch.random.manual_seed(0)
+    model.reset_hooks()
+    model.add_hook(f'blocks.{layer}.attn.hook_z', partial(ablate_head_hook, head=head))
+    text = model.generate(prompt, max_new_tokens=ntokens, temperature=temp, freq_penalty=1.0)
+    print(text)
+    return text
+
+def sample_from_mlp_ablated_model(*, model, layer, prompt, ntokens=100, temp=0.5):
+    torch.random.manual_seed(0)
+    model.reset_hooks()
+    model.add_hook(f'blocks.{layer}.hook_mlp_out', ablate_mlp_hook)
+    text = model.generate(prompt, max_new_tokens=ntokens, temperature=temp, freq_penalty=1.0)
+    print(text)
+    return text
 
 
 if __name__ == '__main__':
