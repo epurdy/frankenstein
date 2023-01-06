@@ -2,7 +2,7 @@ import datasets
 import easy_transformer
 import numpy as np
 import torch
-from easy_transformer import EasyTransformer
+from transformer_lens import EasyTransformer
 from tqdm import tqdm
 
 
