@@ -5,6 +5,7 @@ import setuptools
 setuptools.setup(
     name="frankenstein",
     version="0.0.1",
+    packages=["frankenstein"],
     author='Eric Purdy',
     install_requires=[
         'matplotlib',
