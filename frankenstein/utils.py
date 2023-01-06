@@ -1,5 +1,4 @@
 import datasets
-import easy_transformer
 import numpy as np
 import torch
 from transformer_lens import EasyTransformer
