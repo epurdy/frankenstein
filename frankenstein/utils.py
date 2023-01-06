@@ -1,8 +1,7 @@
 import datasets
-import easy_transformer
 import numpy as np
 import torch
-from easy_transformer import EasyTransformer
+from transformer_lens import EasyTransformer
 from tqdm import tqdm
 
 
@@ -99,7 +98,6 @@ def sample_from_model(*, model, prompt, ntokens=100, temp=0.5):
     text = model.generate(prompt, max_new_tokens=ntokens, temperature=temp, freq_penalty=1.0)
     print(text)
     return text
-
 
 def ablate_head_hook(result, hook, head):
     result[:, :, head, :] = 0
