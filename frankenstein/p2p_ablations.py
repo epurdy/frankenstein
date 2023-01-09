@@ -149,20 +149,21 @@ def harvest_all_p2p_ablation_scores(*, model, dataset, output_dir):
     megacache = defaultdict(list)
     clean_logit_losses = []
     suffixes = ['hook_mlp_out', 'attn.hook_result']
-    for text in dataset:
-        tokens = get_tokens(model=model, text=text)
-        shifted_tokens = torch.cat([tokens[:, 1:], tokens[:, :1]], dim=1)
-        model.reset_hooks()
-        logits, cache = model.run_with_cache(tokens)
-        clean_logit_losses.append(F.cross_entropy(input=logits[0], target=shifted_tokens[0], reduction='none'))
-        for k in cache:
-            if any(k.endswith(s) for s in suffixes):
-                megacache[k].append(cache[k][0].mean(dim=0))
-    mean_activations = {}
-    for k in megacache:
-        # slightly weird weighting, but whatever
-        mean_activations[k] = torch.stack(megacache[k], dim=0).mean(dim=0)
-        #print(k, mean_activations[k].shape)
+    with torch.no_grad():
+        for text in dataset:
+            tokens = get_tokens(model=model, text=text)
+            shifted_tokens = torch.cat([tokens[:, 1:], tokens[:, :1]], dim=1)
+            model.reset_hooks()
+            logits, cache = model.run_with_cache(tokens)
+            clean_logit_losses.append(F.cross_entropy(input=logits[0], target=shifted_tokens[0], reduction='none'))
+            for k in cache:
+                if any(k.endswith(s) for s in suffixes):
+                    megacache[k].append(cache[k][0].mean(dim=0))
+        mean_activations = {}
+        for k in megacache:
+            # slightly weird weighting, but whatever
+            mean_activations[k] = torch.stack(megacache[k], dim=0).mean(dim=0)
+            #print(k, mean_activations[k].shape)
 
     components = ['%d.attn.%d' % (layer, head) 
         for layer in range(model.cfg.n_layers) for head in range(model.cfg.n_heads)]
