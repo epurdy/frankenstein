@@ -99,9 +99,11 @@ def sample_from_model(*, model, prompt, ntokens=100, temp=0.5):
     print(text)
     return text
 
-def ablate_head_hook(result, hook, head):
-    result[:, :, head, :] = 0
-    return result
+def ablate_head_hook(head):
+    def product(result, hook):
+        result[:, :, head, :] = 0
+        return result
+    return product
 
 def ablate_mlp_hook(result, hook):
     result[:, :, :] = 0
