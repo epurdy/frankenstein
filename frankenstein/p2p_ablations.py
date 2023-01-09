@@ -148,6 +148,7 @@ def harvest_all_p2p_ablation_scores(*, model, dataset, output_dir):
 
     megacache = defaultdict(list)
     clean_logit_losses = []
+    suffixes = ['hook_mlp_out', 'attn.hook_result']
     for text in dataset:
         tokens = get_tokens(model=model, text=text)
         shifted_tokens = torch.cat([tokens[:, 1:], tokens[:, :1]], dim=1)
@@ -155,7 +156,8 @@ def harvest_all_p2p_ablation_scores(*, model, dataset, output_dir):
         logits, cache = model.run_with_cache(tokens)
         clean_logit_losses.append(F.cross_entropy(input=logits[0], target=shifted_tokens[0], reduction='none'))
         for k in cache:
-            megacache[k].append(cache[k][0])
+            if any(k.endswith(s) for s in suffixes):
+                megacache[k].append(cache[k][0])
     mean_activations = {}
     for k in megacache:
         mean_activations[k] = torch.cat(megacache[k], dim=0).mean(dim=0)
