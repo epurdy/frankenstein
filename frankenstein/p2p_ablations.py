@@ -87,7 +87,7 @@ def harvest_p2p_ablation_scores_attn_mlp(*, model, tokens, layer1, head1, layer2
     return p2p_ablated_logits
 
 def harvest_p2p_ablation_scores(*, output_dir, model, dataset, upstream, downstream, mean_activations,
-    clean_logit_cache):
+    clean_logit_losses):
     layer1, component1, head1 = upstream.split('.')
     layer2, component2, head2 = downstream.split('.')
 
@@ -99,7 +99,6 @@ def harvest_p2p_ablation_scores(*, output_dir, model, dataset, upstream, downstr
         lengths[itext] = len(tokens)
         shifted_tokens = torch.cat([tokens[:, 1:], tokens[:, :1]], dim=1)
         model.reset_hooks()
-        clean_logits = clean_logit_cache[itext]
 
         if component1 == component2 == 'mlp':
             p2p_ablated_logits = harvest_p2p_ablation_scores_mlp_mlp(model=model, tokens=tokens,
@@ -118,7 +117,7 @@ def harvest_p2p_ablation_scores(*, output_dir, model, dataset, upstream, downstr
                 layer1=int(layer1), head1=int(head1), layer2=int(layer2),
                 mean_activations=mean_activations)
 
-        clean_loss = F.cross_entropy(input=clean_logits[0], target=shifted_tokens[0], reduction='none')
+        clean_loss = clean_logit_losses[itext]
         p2p_ablated_loss = F.cross_entropy(p2p_ablated_logits[0], shifted_tokens[0], reduction='none')
         loss_diff = p2p_ablated_loss - clean_loss
         for i in range(loss_diff.shape[0]):
@@ -148,12 +147,13 @@ def harvest_all_p2p_ablation_scores(*, model, dataset, output_dir):
     model.set_use_attn_result(True)
 
     megacache = defaultdict(list)
-    clean_logit_cache = []
+    clean_logit_losses = []
     for text in dataset:
         tokens = get_tokens(model=model, text=text)
+        shifted_tokens = torch.cat([tokens[:, 1:], tokens[:, :1]], dim=1)
         model.reset_hooks()
         logits, cache = model.run_with_cache(tokens)
-        clean_logit_cache.append(logits)
+        clean_logit_losses.append(F.cross_entropy(input=logits[0], target=shifted_tokens[0], reduction='none'))
         for k in cache:
             megacache[k].append(cache[k][0])
     mean_activations = {}
@@ -173,4 +173,4 @@ def harvest_all_p2p_ablation_scores(*, model, dataset, output_dir):
                 harvest_p2p_ablation_scores(model=model, dataset=dataset, 
                     upstream=upstream, downstream=downstream,
                     mean_activations=mean_activations, output_dir=output_dir, 
-                    clean_logit_cache=clean_logit_cache)
+                    clean_logit_losses=clean_logit_losses)
