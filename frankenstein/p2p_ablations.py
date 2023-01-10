@@ -43,13 +43,15 @@ def harvest_p2p_ablation_scores_mlp_mlp(*, model, layer1, layer2, mean_activatio
                                 mean=mean_activations[f'blocks.{layer1}.hook_mlp_out']))])
     return p2p_ablated_logits
 
-def harvest_p2p_ablation_scores_attn_attn(*, model, tokens, layer1, head1, layer2, head2, mean_activations):
+def harvest_p2p_ablation_scores_attn_attn(*, model, tokens, layer1, head1, layer2, head2, mat2, 
+                                          mean_activations):
     print(f'Harvesting p2p ablation scores for attn-attn {layer1}.{head1} -> {layer2}.{head2}')
     microcache = {}
+    mat2 = mat2.lower()
     p2p_ablated_logits = model.run_with_hooks(tokens,
         fwd_hooks=[(f'blocks.{layer1}.attn.hook_result', partial(remember_head_hook, cache=microcache, head=head1)),
                     (f'blocks.{layer2}.hook_resid_pre', partial(remember_hook, cache=microcache)),
-                    (f'blocks.{layer2}.attn.hook_input', 
+                    (f'blocks.{layer2}.attn.hook_input_{mat2}', 
                         partial(p2p_ablate_attn_hook, cache=microcache, head=head2,
                                 key1=f'blocks.{layer1}.attn.hook_result',
                                 key2=f'blocks.{layer2}.hook_resid_pre',
@@ -57,13 +59,14 @@ def harvest_p2p_ablation_scores_attn_attn(*, model, tokens, layer1, head1, layer
                                 mean=mean_activations[f'blocks.{layer1}.attn.hook_result'][head1, :]))])
     return p2p_ablated_logits
 
-def harvest_p2p_ablation_scores_mlp_attn(*, model, tokens, layer1, layer2, head2, mean_activations):
+def harvest_p2p_ablation_scores_mlp_attn(*, model, tokens, layer1, layer2, head2, mat2, mean_activations):
     print(f'Harvesting p2p ablation scores for mlp-attn {layer1} -> {layer2}.{head2}')
     microcache = {}
+    mat2 = mat2.lower()
     p2p_ablated_logits = model.run_with_hooks(tokens,
         fwd_hooks=[(f'blocks.{layer1}.hook_mlp_out', partial(remember_hook, cache=microcache)),
                     (f'blocks.{layer2}.hook_resid_pre', partial(remember_hook, cache=microcache)),
-                    (f'blocks.{layer2}.attn.hook_input', 
+                    (f'blocks.{layer2}.attn.hook_input_{mat2}', 
                         partial(p2p_ablate_attn_hook, cache=microcache, head=head2,
                                 key1=f'blocks.{layer1}.hook_mlp_out',
                                 key2=f'blocks.{layer2}.hook_resid_pre',
@@ -87,16 +90,16 @@ def harvest_p2p_ablation_scores_attn_mlp(*, model, tokens, layer1, head1, layer2
     return p2p_ablated_logits
 
 def harvest_p2p_ablation_scores(*, output_dir, model, dataset, upstream, downstream, mean_activations,
-    clean_logit_losses):
-    layer1, component1, head1 = upstream.split('.')
-    layer2, component2, head2 = downstream.split('.')
+    clean_logit_losses, save=True):
+    layer1, component1, head1, mat1 = upstream.split('.')
+    layer2, component2, head2, mat2 = downstream.split('.')
 
     retval = np.zeros((len(dataset), 1024))
     lengths = np.zeros(len(dataset))
     mean_computation_values = []
     for itext, text in enumerate(dataset):
         tokens = get_tokens(model=model, text=text)
-        lengths[itext] = len(tokens)
+        lengths[itext] = len(tokens[0])
         shifted_tokens = torch.cat([tokens[:, 1:], tokens[:, :1]], dim=1)
         model.reset_hooks()
 
@@ -106,11 +109,11 @@ def harvest_p2p_ablation_scores(*, output_dir, model, dataset, upstream, downstr
                                                 mean_activations=mean_activations)
         elif component1 == component2 == 'attn':
             p2p_ablated_logits = harvest_p2p_ablation_scores_attn_attn(model=model, tokens=tokens,
-                layer1=int(layer1), head1=int(head1), layer2=int(layer2), head2=int(head2),
+                layer1=int(layer1), head1=int(head1), layer2=int(layer2), head2=int(head2), mat2=mat2,
                 mean_activations=mean_activations)
         elif (component1, component2) == ('mlp', 'attn'):
             p2p_ablated_logits = harvest_p2p_ablation_scores_mlp_attn(model=model, tokens=tokens,
-                layer1=int(layer1), layer2=int(layer2), head2=int(head2),
+                layer1=int(layer1), layer2=int(layer2), head2=int(head2), mat2=mat2,
                 mean_activations=mean_activations)
         elif (component1, component2) == ('attn', 'mlp'):
             p2p_ablated_logits = harvest_p2p_ablation_scores_attn_mlp(model=model, tokens=tokens,
@@ -127,25 +130,25 @@ def harvest_p2p_ablation_scores(*, output_dir, model, dataset, upstream, downstr
     mean = np.mean(mean_computation_values)
     print(f'Mean loss diff: {mean:.3f} (std: {np.std(mean_computation_values):.3f})')
 
-    output_path = os.path.join(output_dir, f'{upstream}_{downstream}.{len(dataset)}docs.npz')
-    np.savez_compressed(output_path, loss_diffs=retval, lengths=lengths)
+    if save:
+        output_path = os.path.join(output_dir, f'{upstream}_{downstream}.{len(dataset)}docs.npz')
+        np.savez_compressed(output_path, loss_diffs=retval, lengths=lengths)
+
+    return retval, lengths
 
 def before(*, upstream, downstream):
-    layer1, component1, head1 = upstream.split('.')
-    layer2, component2, head2 = downstream.split('.')
+    layer1, component1, head1, mat1 = upstream.split('.')
+    layer2, component2, head2, mat2 = downstream.split('.')
     if component1 == component2 == 'mlp':
         return int(layer1) < int(layer2)
     elif component1 == component2 == 'attn':
-        return int(layer1) < int(layer2)
+        return (int(layer1) < int(layer2)) and (mat1 == 'O') and (mat2 in 'QKV')
     elif (component1, component2) == ('mlp', 'attn'):
-        return int(layer1) < int(layer2)
+        return (int(layer1) < int(layer2)) and (mat2 in 'QKV')
     elif (component1, component2) == ('attn', 'mlp'):
-        return int(layer1) <= int(layer2)
+        return (int(layer1) <= int(layer2)) and (mat1 == 'O')
 
-def harvest_all_p2p_ablation_scores(*, model, dataset, output_dir):
-    model.set_use_attn_input(True)
-    model.set_use_attn_result(True)
-
+def harvest_mean_activations(*, model, dataset, device=None):
     megacache = defaultdict(list)
     clean_logit_losses = []
     suffixes = ['hook_mlp_out', 'attn.hook_result']
@@ -162,8 +165,18 @@ def harvest_all_p2p_ablation_scores(*, model, dataset, output_dir):
         mean_activations = {}
         for k in megacache:
             # slightly weird weighting, but whatever
-            mean_activations[k] = torch.stack(megacache[k], dim=0).mean(dim=0).cuda()
+            mean_activations[k] = torch.stack(megacache[k], dim=0).mean(dim=0)
+            if device:
+                mean_activations[k] = mean_activations[k].to(device)
             #print(k, mean_activations[k].shape)
+    return mean_activations, clean_logit_losses
+
+def harvest_all_p2p_ablation_scores(*, model, dataset, output_dir):
+    model.set_use_attn_input(True)
+    model.set_use_attn_result(True)
+
+    mean_activations, clean_logit_losses = harvest_mean_activations(
+        model=model, dataset=dataset)
 
     components = ['%d.attn.%d' % (layer, head) 
         for layer in range(model.cfg.n_layers) for head in range(model.cfg.n_heads)]
