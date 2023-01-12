@@ -161,7 +161,11 @@ def harvest_mean_activations(*, model, dataset, device=None):
             clean_logit_losses.append(F.cross_entropy(input=logits[0], target=shifted_tokens[0], reduction='none'))
             for k in cache:
                 if any(k.endswith(s) for s in suffixes):
-                    megacache[k].append(cache[k][0].mean(dim=0).cpu())
+                    eot_mask = (tokens[0] != 50256)
+                    eot_mask = eot_mask * len(eot_mask) / eot_mask.sum()
+                    while len(eot_mask.shape) < len(cache[k][0].shape):
+                        eot_mask = eot_mask.unsqueeze(-1)
+                    megacache[k].append((cache[k][0] * eot_mask).mean(dim=0).cpu())
         mean_activations = {}
         for k in megacache:
             # slightly weird weighting, but whatever
@@ -178,9 +182,11 @@ def harvest_all_p2p_ablation_scores(*, model, dataset, output_dir):
     mean_activations, clean_logit_losses = harvest_mean_activations(
         model=model, dataset=dataset)
 
-    components = ['%d.attn.%d' % (layer, head) 
-        for layer in range(model.cfg.n_layers) for head in range(model.cfg.n_heads)]
-    components.extend(['%d.mlp.xxx' % layer for layer in range(model.cfg.n_layers)])
+    components = [f'{layer}.attn.{head}.{mat}'
+        for layer in range(model.cfg.n_layers) 
+        for head in range(model.cfg.n_heads)
+        for mat in 'QKVO']
+    components.extend(['%d.mlp.xxx.xxx' % layer for layer in range(model.cfg.n_layers)])
 
     for upstream in tqdm(components):
         for downstream in components:
