@@ -58,7 +58,7 @@ def evaluate_subset_index(*, dataset, good_idxs, model, subset, seed):
         return loss_diff.item()
 
 NUM_TRIALS = 3
-def evaluate_subset_index_wrapper(kwargs):
+def evaluate_subset_index_wrapper(  kwargs):
     total = 0
     seed = kwargs['seed']
     kwargs.pop('seed')
