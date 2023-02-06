@@ -97,7 +97,6 @@ def get_prefix_ioi(model):
     random.shuffle(whitelisted_prefixes)
 
     length_filtered_prefixes = []
-
     token_counts = []
     for i, prefix in enumerate(whitelisted_prefixes):
         tokens = get_tokens(model=model, text=prefix)[0]
@@ -110,6 +109,7 @@ def get_prefix_ioi(model):
     print(len(length_filtered_prefixes))
     print(np.bincount(token_counts))
 
+    return dict(ioi=ioi, prefixes=length_filtered_prefixes)
 
 
 
@@ -177,3 +177,82 @@ def check_ioi_performance2(model, ioi):
 
     plt.figure()
     plt.hist(logit_diffs, bins=100)
+
+
+def build_classifier_datasets(*, model, ioi, prefixes, n=1000):
+    dataset = defaultdict(list)
+    print(ioi.sem_tok_idx.keys())
+    for i in tqdm(range(n)):
+        augmented_prompt = created_augmented_prompt(model=model, prefix=prefixes[i], ioi=ioi, i=i)
+        tokens = augmented_prompt['tokens']
+        offset = augmented_prompt['offset']
+        i_ioi = augmented_prompt['i_ioi']
+
+        iopos = offset + ioi.sem_tok_idx['IO'][i_ioi].item()
+        s1pos = offset + ioi.sem_tok_idx['S'][i_ioi].item()
+        s1p1pos = offset + ioi.sem_tok_idx['S+1'][i_ioi].item()
+        s2pos = offset + ioi.sem_tok_idx['S2'][i_ioi].item()
+        endpos = offset + ioi.sem_tok_idx['end'][i_ioi].item()
+        abb = (iopos < s1pos)
+        if abb:
+            name1pos = iopos
+            name2pos = s1pos
+        else: # bab
+            name1pos = s1pos
+            name2pos = iopos
+        ioname = tokens[iopos].item()
+        sname = tokens[s1pos].item()
+        name1 = tokens[name1pos].item()
+        name2 = tokens[name2pos].item()
+
+        datapoint = dict(
+            augmented_prompt=augmented_prompt,
+            iopos=iopos, s1pos=s1pos, s1p1pos=s1p1pos, s2pos=s2pos,
+            endpos=endpos, name1pos=name1pos, name2pos=name2pos,
+            ioname=ioname, sname=sname,
+            name1=name1, name2=name2, abb=abb)
+
+        model.set_use_attn_result(True)
+        model.reset_hooks()
+        logits, cache = model.run_with_cache(tokens.long())
+        for layer in range(model.cfg.n_layers):
+            for head in range(model.cfg.n_heads):
+                vecend = cache[f'blocks.{layer}.attn.hook_result'][0, endpos, head, :]
+                vecio = cache[f'blocks.{layer}.attn.hook_result'][0, iopos, head, :]                
+                vecs1 = cache[f'blocks.{layer}.attn.hook_result'][0, s1pos, head, :]
+                vecs1p1 = cache[f'blocks.{layer}.attn.hook_result'][0, s1p1pos, head, :]
+                vecs2 = cache[f'blocks.{layer}.attn.hook_result'][0, s2pos, head, :]
+                vecname1 = cache[f'blocks.{layer}.attn.hook_result'][0, name1pos, head, :]
+                vecname2 = cache[f'blocks.{layer}.attn.hook_result'][0, name2pos, head, :]
+                dataset[layer, head].append(dict(
+                    vecend=vecend, vecio=vecio, vecs1=vecs1, vecs1p1=vecs1p1, vecs2=vecs2,
+                    vecname1=vecname1, vecname2=vecname2, **datapoint))
+            # mlp
+            vecend = cache[f'blocks.{layer}.hook_mlp_out'][0, endpos, :]
+            vecio = cache[f'blocks.{layer}.hook_mlp_out'][0, iopos, :]
+            vecs1 = cache[f'blocks.{layer}.hook_mlp_out'][0, s1pos, :]
+            vecs1p1 = cache[f'blocks.{layer}.hook_mlp_out'][0, s1p1pos, :]
+            vecs2 = cache[f'blocks.{layer}.hook_mlp_out'][0, s2pos, :]
+            vecname1 = cache[f'blocks.{layer}.hook_mlp_out'][0, name1pos, :]
+            vecname2 = cache[f'blocks.{layer}.hook_mlp_out'][0, name2pos, :]
+            dataset[layer, 'mlp'].append(dict(
+                vecend=vecend, vecio=vecio, vecs1=vecs1, vecs1p1=vecs1p1, vecs2=vecs2,
+                vecname1=vecname1, vecname2=vecname2, **datapoint))
+
+            for resid_point in ['pre', 'mid', 'post']:
+                if resid_point == 'post' and layer < 11:
+                    continue
+                vecend = cache[f'blocks.{layer}.hook_resid_{resid_point}'][0, endpos, :]
+                vecio = cache[f'blocks.{layer}.hook_resid_{resid_point}'][0, iopos, :]
+                vecs1 = cache[f'blocks.{layer}.hook_resid_{resid_point}'][0, s1pos, :]
+                vecs1p1 = cache[f'blocks.{layer}.hook_resid_{resid_point}'][0, s1p1pos, :]
+                vecs2 = cache[f'blocks.{layer}.hook_resid_{resid_point}'][0, s2pos, :]
+                vecname1 = cache[f'blocks.{layer}.hook_resid_{resid_point}'][0, name1pos, :]
+                vecname2 = cache[f'blocks.{layer}.hook_resid_{resid_point}'][0, name2pos, :]
+                dataset[layer, resid_point].append(dict(
+                    vecend=vecend, vecio=vecio, vecs1=vecs1, vecs1p1=vecs1p1, vecs2=vecs2,
+                    vecname1=vecname1, vecname2=vecname2,
+                    **datapoint))
+                
+    return dataset
+    
